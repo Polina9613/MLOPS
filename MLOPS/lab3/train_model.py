@@ -87,4 +87,4 @@ if __name__ == "__main__":
     # Получение пути к лучшей модели
     dfruns = mlflow.search_runs()
     path2model = dfruns.sort_values("metrics.r2", ascending=False).iloc[0]['artifact_uri'].replace("file://","") + '/model'
-    print(f"Path to best model: {path2model}")
+    print(path2model)
