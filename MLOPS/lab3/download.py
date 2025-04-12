@@ -1,52 +1,39 @@
 import pandas as pd
-from sklearn.preprocessing import OrdinalEncoder
+from sklearn.preprocessing import OrdinalEncoder, StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
 
 def download_data():
-    df = pd.read_csv('https://raw.githubusercontent.com/dayekb/Basic_ML_Alg/main/cars_moldova_no_dup.csv', delimiter = ',')
-    df.to_csv("cars.csv", index = False)
+    """Загрузка данных"""
+    df = pd.read_csv('insurance_miptstats.csv', sep=',')
+    df.to_csv("insurance_raw.csv", index=False)
     return df
 
 def clear_data(path2df):
+    """Очистка и предобработка данных"""
     df = pd.read_csv(path2df)
     
-    cat_columns = ['Make', 'Model', 'Style', 'Fuel_type', 'Transmission']
-    num_columns = ['Year', 'Distance', 'Engine_capacity(cm3)', 'Price(euro)']
+    # Создание признака возраста
+    df['age'] = pd.to_datetime('today').year - pd.to_datetime(df['birthday']).dt.year
+    df = df.drop(columns=['birthday'])
     
-    question_dist = df[(df.Year <2021) & (df.Distance < 1100)]
-    df = df.drop(question_dist.index)
-    # Анализ и очистка данных
-    # анализ гистограмм
-    question_dist = df[(df.Distance > 1e6)]
-    df = df.drop(question_dist.index)
+    # Удаление выбросов
+    df = df[(df['age'] >= 18) & (df['age'] <= 80)]
+    df = df[(df['bmi'] >= 15) & (df['bmi'] <= 50)]
+    df = df[(df['charges'] >= 1000) & (df['charges'] <= 50000)]
     
-    # здравый смысл
-    question_engine = df[df["Engine_capacity(cm3)"] < 200]
-    df = df.drop(question_engine.index)
+    # Кодирование категориальных признаков
+    cat_columns = ['sex', 'smoker', 'region']
+    num_columns = ['age', 'bmi', 'children']
     
-    # здравый смысл
-    question_engine = df[df["Engine_capacity(cm3)"] > 5000]
-    df = df.drop(question_engine.index)
-    
-    # здравый смысл
-    question_price = df[(df["Price(euro)"] < 101)]
-    df = df.drop(question_price.index)
-    
-    # анализ гистограмм
-    question_price = df[df["Price(euro)"] > 1e5]
-    df = df.drop(question_price.index)
-    
-    #анализ гистограмм
-    question_year = df[df.Year < 1971]
-    df = df.drop(question_year.index)
-    
-    df = df.reset_index(drop=True)  
     ordinal = OrdinalEncoder()
     ordinal.fit(df[cat_columns])
-    Ordinal_encoded = ordinal.transform(df[cat_columns])
-    df_ordinal = pd.DataFrame(Ordinal_encoded, columns=cat_columns)
+    df_ordinal = pd.DataFrame(ordinal.transform(df[cat_columns]), columns=cat_columns)
     df[cat_columns] = df_ordinal[cat_columns]
-    df.to_csv('df_clear.csv')
+    
+    # Сохранение очищенных данных
+    df.to_csv('insurance_clean.csv', index=False)
     return True
 
-download_data()
-clear_data("cars.csv")
+if __name__ == "__main__":
+    download_data()
+    clear_data("insurance_raw.csv")
