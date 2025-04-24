@@ -1,24 +1,15 @@
-from os import name
-from sklearn.preprocessing import StandardScaler, PowerTransformer
+import os
 import pandas as pd
-from sklearn.model_selection import train_test_split
-import mlflow
-from sklearn.linear_model import SGDRegressor
-from sklearn.model_selection import GridSearchCV
 import numpy as np
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from mlflow.models import infer_signature
 import joblib
-
-
-def scale_frame(frame):
-    df = frame.copy()
-    X,y = df.drop(columns = ['Price(euro)']), df['Price(euro)']
-    scaler = StandardScaler()
-    power_trans = PowerTransformer()
-    X_scale = scaler.fit_transform(X.values)
-    Y_scale = power_trans.fit_transform(y.values.reshape(-1,1))
-    return X_scale, Y_scale, power_trans
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+import mlflow
+from mlflow.models import infer_signature
 
 def eval_metrics(actual, pred):
     rmse = np.sqrt(mean_squared_error(actual, pred))
@@ -26,49 +17,59 @@ def eval_metrics(actual, pred):
     r2 = r2_score(actual, pred)
     return rmse, mae, r2
 
+def train_model():
+    base_path = os.path.dirname(__file__)
+    data_path = os.path.join(base_path, "insurance_clean.csv")
+    model_path = os.path.join(base_path, "gb_insurance.pkl")
 
-def train():
-    df = pd.read_csv("./df_clear.csv")
-    X,Y, power_trans = scale_frame(df)
-    X_train, X_val, y_train, y_val = train_test_split(X, Y,
-                                                    test_size=0.3,
-                                                    random_state=42)
-    
+    if not os.path.exists(data_path):
+        raise FileNotFoundError(f"Файл не найден: {data_path}")
 
-    params = {'alpha': [0.0001, 0.001, 0.01, 0.05, 0.1 ],
-            'l1_ratio': [0.001, 0.05, 0.01, 0.2],
-            "penalty": ["l1","l2","elasticnet"],
-            "loss": ['squared_error', 'huber', 'epsilon_insensitive'],
-            "fit_intercept": [False, True],
-            }
-    
-    mlflow.set_experiment("linear model cars")
+    print("Загрузка данных...")
+    df = pd.read_csv(data_path)
+
+    X = df.drop("charges", axis=1)
+    y = df["charges"]
+
+    cat_features = ['sex', 'smoker', 'region']
+    num_features = ['age', 'bmi', 'children']
+
+    preprocessor = ColumnTransformer([
+        ('num', StandardScaler(), num_features),
+        ('cat', OneHotEncoder(), cat_features)
+    ])
+
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.3, random_state=42)
+
+    pipeline = Pipeline([
+        ('preprocessor', preprocessor),
+        ('model', GradientBoostingRegressor(random_state=42))
+    ])
+
+    param_grid = {
+        'model__n_estimators': [100, 200],
+        'model__learning_rate': [0.05, 0.1],
+        'model__max_depth': [3, 5],
+    }
+
+    mlflow.set_experiment("Insurance_Model_Training")
+
     with mlflow.start_run():
-        lr = SGDRegressor(random_state=42)
-        clf = GridSearchCV(lr, params, cv = 3, n_jobs = 4)
-        clf.fit(X_train, y_train.reshape(-1))
-        best = clf.best_estimator_
-        y_pred = best.predict(X_val)
-        y_price_pred = power_trans.inverse_transform(y_pred.reshape(-1,1))
-        (rmse, mae, r2)  = eval_metrics(power_trans.inverse_transform(y_val), y_price_pred)
-        alpha = best.alpha
-        l1_ratio = best.l1_ratio
-        penalty = best.penalty
-        eta0 = best.eta0
-        mlflow.log_param("alpha", alpha)
-        mlflow.log_param("l1_ratio", l1_ratio)
-        mlflow.log_param("penalty", penalty)
-        mlflow.log_param("eta0", eta0)
-        mlflow.log_param("loss", best.loss)
-        mlflow.log_param("fit_intercept", best.fit_intercept)
-        mlflow.log_param("epsilon", best.epsilon)
-        
-        mlflow.log_metric("rmse", rmse)
-        mlflow.log_metric("r2", r2)
-        mlflow.log_metric("mae", mae)
-        
-        predictions = best.predict(X_train)
-        signature = infer_signature(X_train, predictions)
-        mlflow.sklearn.log_model(best, "model", signature=signature)
-        with open("lr_cars.pkl", "wb") as file:
-            joblib.dump(lr, file)
+        print("Обучение модели...")
+        clf = GridSearchCV(pipeline, param_grid, cv=3, scoring='neg_mean_squared_error', n_jobs=-1)
+        clf.fit(X_train, y_train)
+
+        best_model = clf.best_estimator_
+        y_pred = best_model.predict(X_val)
+
+        rmse, mae, r2 = eval_metrics(y_val, y_pred)
+        print(f"Оценка модели: RMSE={rmse}, MAE={mae}, R2={r2}")
+
+        mlflow.log_params(clf.best_params_)
+        mlflow.log_metrics({'rmse': rmse, 'mae': mae, 'r2': r2})
+
+        signature = infer_signature(X_train, best_model.predict(X_train))
+        mlflow.sklearn.log_model(best_model, "model", signature=signature)
+
+        joblib.dump(best_model, model_path)
+        print(f"Модель сохранена в: {model_path}")
